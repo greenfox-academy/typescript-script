@@ -1,6 +1,90 @@
 // BASED on https://github.com/niutech/typescript-compile but using 1.5 transpile function
 
 (function () {
+  function transpile(input) {
+    // modified transpileModule function to show type errors
+    const transpileOptions = {};
+    const options = transpileOptions.compilerOptions ? fixupCompilerOptions(transpileOptions.compilerOptions, []) : ts.getDefaultCompilerOptions();
+
+    // transpileModule does not write anything to disk so there is no need to verify that there are no conflicts between input and output paths.
+    options.suppressOutputPathCheck = true;
+
+    // Filename can be non-ts file.
+    options.allowNonTsExtensions = true;
+
+    // We are not returning a sourceFile for lib file when asked by the program,
+    // so pass --noLib to avoid reporting a file not found error.
+    options.noLib = true;
+
+    // Clear out other settings that would not be used in transpiling this module
+    options.lib = undefined;
+    options.types = true;
+    options.noEmit = undefined;
+    options.noEmitOnError = undefined;
+    options.paths = undefined;
+    options.rootDirs = undefined;
+    options.declaration = undefined;
+    options.declarationDir = undefined;
+    options.out = undefined;
+    options.outFile = undefined;
+
+    // We are not doing a full typecheck, we are not resolving the whole context,
+    // so pass --noResolve to avoid reporting missing file errors.
+    options.noResolve = true;
+
+    // if jsx is specified then treat file as .tsx
+    const inputFileName = transpileOptions.fileName || (options.jsx ? "module.tsx" : "module.ts");
+    const sourceFile = ts.createSourceFile(inputFileName, input, options.target);
+    if (transpileOptions.moduleName) {
+      sourceFile.moduleName = transpileOptions.moduleName;
+    }
+
+    if (transpileOptions.renamedDependencies) {
+      sourceFile.renamedDependencies = createMapFromTemplate(transpileOptions.renamedDependencies);
+    }
+
+    const newLine = ts.getNewLineCharacter(options);
+
+    // Output
+    let outputText;
+
+    // Create a compilerHost object to allow the compiler to read and write files
+    const compilerHost = {
+      getSourceFile: (fileName) => fileName === ts.normalizePath(inputFileName) ? sourceFile : undefined,
+      writeFile: (name, text) => {
+        if (!ts.fileExtensionIs(name, ".map")) {
+          ts.Debug.assertEqual(outputText, undefined, "Unexpected multiple outputs, file:", name);
+          outputText = text;
+        }
+      },
+      getDefaultLibFileName: () => "lib.d.ts",
+      useCaseSensitiveFileNames: () => false,
+      getCanonicalFileName: fileName => fileName,
+      getCurrentDirectory: () => "",
+      getNewLine: () => newLine,
+      fileExists: (fileName) => fileName === inputFileName,
+      readFile: () => "",
+      directoryExists: () => true,
+      getDirectories: () => []
+    };
+
+    const program = ts.createProgram([inputFileName], options, compilerHost);
+
+    // Emit
+    const emitResult = program.emit(/*targetSourceFile*/ undefined, /*writeFile*/ undefined, /*cancellationToken*/ undefined, /*emitOnlyDtsFiles*/ undefined, transpileOptions.transformers);
+
+    let allDiagnostics = ts.getPreEmitDiagnostics(program).concat(emitResult.diagnostics);
+    let errors = allDiagnostics.filter(d => d.file).map(d => ({
+      message: d.messageText
+    }));
+
+
+    ts.Debug.assert(outputText !== undefined, "Output generation failed");
+
+    return { outputText, errors };
+  }
+
+
     //Keep track of the number of scripts to be pulled, and fire the compiler
     //after the number of loaded reaches the total
     var scripts = {
@@ -57,7 +141,9 @@
                 for (num = 0; num < scripts.data.length; num++) {
                     filename = scripts.name[num] = scripts.name[num].slice(scripts.name[num].lastIndexOf('/') + 1);
                     var src = scripts.data[num];
-                    source += ts.transpile(src);
+                    var compiled = transpile(src);
+                    source += compiled.outputText;
+                    compiled.errors.forEach(e => console.error(e.message));
                 }
             })();
         }
