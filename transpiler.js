@@ -1,5 +1,3 @@
-// BASED on https://github.com/niutech/typescript-compile but using 1.5 transpile function
-
 (function () {
   function transpile(input) {
     // modified transpileModule function to show type errors
